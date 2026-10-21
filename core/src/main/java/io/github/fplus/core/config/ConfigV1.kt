@@ -413,6 +413,17 @@ class ConfigV1 private constructor() {
             field = value
         }
 
+    /// 长按屏幕上半部分唤起模块设置
+    var isLongPressSetting: Boolean = true
+        get() {
+            field = mmkv.getBoolean("isLongPressSetting", true)
+            return field
+        }
+        set(value) {
+            mmkv.putBoolean("isLongPressSetting", value)
+            field = value
+        }
+
     /// 移除悬浮挑战/评论贴纸
     var isRemoveSticker: Boolean = false
         get() {

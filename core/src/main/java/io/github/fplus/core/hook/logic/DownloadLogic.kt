@@ -213,8 +213,15 @@ class DownloadLogic(
                         val imageFiles = mutableListOf<File>()
                         var downloadCount = 0 // 下载计数器
                         structList.forEachIndexed { index, urlStruct ->
+                            val url = urlStruct.urlList.firstOrNull()
+                            if (url.isNullOrBlank()) {
+                                // 少数图文条目 urlList 为空，跳过即可；
+                                // 用 first() 会抛 NoSuchElementException 打断整组下载。
+                                XplerLog.d("图片URL为空, 跳过 index=$index")
+                                return@forEachIndexed
+                            }
                             val resultFile = downloadFile(
-                                url = urlStruct.urlList.first(),
+                                url = url,
                                 downloadFile = File(mImageParent.need(), mPureFileName.secureFilename("_${index + 1}.jpg")),
                                 notify = it,
                                 progressText = "$index/${aweme.images.size} %s%%",
@@ -282,8 +289,14 @@ class DownloadLogic(
                     hook.singleLaunchIO(mPureFileName) {
                         var downloadCount = 0 // 下载计数器
                         structList.forEachIndexed { index, urlStruct ->
+                            val url = urlStruct.urlList.firstOrNull()
+                            if (url.isNullOrBlank()) {
+                                // 同上：空 URL 跳过，避免打断整组图片下载
+                                XplerLog.d("图片URL为空, 跳过 index=$index")
+                                return@forEachIndexed
+                            }
                             val resultFile = downloadFile(
-                                url = urlStruct.urlList.first(),
+                                url = url,
                                 downloadFile = File(mImageParent.need(), mPureFileName.secureFilename("_${index + 1}.jpg")),
                                 notify = notify,
                                 progressText = "$index/${aweme.images.size} %s%%",

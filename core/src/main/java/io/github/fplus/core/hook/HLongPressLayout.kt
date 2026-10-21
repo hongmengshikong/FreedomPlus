@@ -1,7 +1,5 @@
 package io.github.fplus.core.hook
 
-import android.app.ActivityOptions
-import android.content.Intent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -9,12 +7,10 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.core.view.children
 import androidx.core.view.isVisible
-import com.freegang.extension.activeActivity
 import com.freegang.extension.asOrNull
 import com.freegang.extension.findFieldGetValue
 import com.freegang.extension.firstParentOrNull
 import com.freegang.extension.forEachChild
-import com.freegang.extension.isDarkMode
 import com.freegang.extension.screenSize
 import com.freegang.ktutils.other.KAutomationUtils
 import com.freegang.ktutils.view.KViewUtils
@@ -24,10 +20,10 @@ import com.ss.android.ugc.aweme.feed.ui.PenetrateTouchRelativeLayout
 import io.github.fplus.core.base.BaseHook
 import io.github.fplus.core.config.ConfigV1
 import io.github.fplus.core.helper.DexkitBuilder
+import io.github.fplus.core.helper.ModuleSettingHelper
 import io.github.fplus.core.hook.logic.DownloadLogic
 import io.github.fplus.core.hook.logic.cityInfo
 import io.github.fplus.core.hook.logic.createDate
-import io.github.fplus.core.ui.activity.FreedomSettingActivity
 import io.github.xpler.core.XplerLog
 import io.github.xpler.core.hookBlockRunning
 import io.github.xpler.core.hookClass
@@ -139,14 +135,23 @@ class HLongPressLayout : BaseHook() {
         if (event.x < screenSize.width / 8 || event.x > screenSize.width - screenSize.width / 8)
             return
 
+        // 长按上半部分: 直接唤起模块设置
+        if (config.isLongPressSetting && event.y < screenSize.height / 2) {
+            ModuleSettingHelper.open(view.context)
+            return
+        }
+
         if (!config.isNeatMode)
             return
 
-        if (!config.longPressMode) {
-            if (event.y < screenSize.height / 2)
+        // 上半部分被"长按唤起模块设置"占用时, 清爽模式菜单改为只从下半响应,
+        // 避免同一个手势触发两个入口。
+        val menuOnTop = config.longPressMode && !config.isLongPressSetting
+        if (menuOnTop) {
+            if (event.y > screenSize.height / 2)
                 return
         } else {
-            if (event.y > screenSize.height / 2)
+            if (event.y < screenSize.height / 2)
                 return
         }
 
@@ -280,14 +285,7 @@ class HLongPressLayout : BaseHook() {
             }
 
             "模块设置" -> {
-                val intent = Intent().setClass(view.context, FreedomSettingActivity::class.java)
-                intent.putExtra("isDark", view.context.isDarkMode)
-                val options = ActivityOptions.makeCustomAnimation(
-                    activeActivity,
-                    android.R.anim.slide_in_left,
-                    android.R.anim.slide_out_right
-                )
-                view.context.startActivity(intent, options.toBundle())
+                ModuleSettingHelper.open(view.context)
             }
         }
     }
@@ -372,13 +370,22 @@ class HLongPressLayout : BaseHook() {
                         val x = args[0] as Float
                         val y = args[1] as Float
 
+                        // 长按上半部分唤起模块设置, 同时拦截抖音原生长按弹窗
+                        if (config.isLongPressSetting && y < screenSize.height / 2) {
+                            setResultVoid()
+                            return@onBefore
+                        }
+
                         if (!config.isNeatMode)
                             return@onBefore
 
                         aweme = thisObject?.findFieldGetValue { type(Aweme::class.java) }
                             ?: HVideoViewHolder.aweme
 
-                        if (config.longPressMode) {
+                        // 与 onLongPress 的区域判定保持一致: 上半被模块设置占用时,
+                        // 清爽模式菜单的拦截区改为下半。
+                        val menuOnTop = config.longPressMode && !config.isLongPressSetting
+                        if (menuOnTop) {
                             if (y < screenSize.height / 2)
                                 setResultVoid()
                         } else {

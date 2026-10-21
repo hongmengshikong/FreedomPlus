@@ -289,6 +289,7 @@ class FreedomSettingActivity : XplerActivity() {
             item { VideoFilterItem() }
             item { DialogFilterItem() }
             item { NeatModeItem() }
+            item { LongPressSettingItem() }
             item { AutoPlayItem() }
             item { ImmersiveItem() }
             item { CommentColorModeItem() }
@@ -1389,6 +1390,7 @@ class FreedomSettingActivity : XplerActivity() {
 
         if (showLongPressModeDialog) {
             val longPressMode by model.longPressMode.observeAsState(false)
+            val isLongPressSetting by model.isLongPressSetting.observeAsState(true)
 
             FMessageDialog(
                 title = "请选择响应模式",
@@ -1423,9 +1425,28 @@ class FreedomSettingActivity : XplerActivity() {
                             style = MaterialTheme.typography.body1,
                         )
                     }
+                    if (isLongPressSetting) {
+                        Text(
+                            modifier = Modifier.padding(top = 8.dp),
+                            text = "提示: 已开启「长按上半部分打开模块设置」, 长按视频上半将直接唤起模块设置, 清爽模式菜单只从下半响应。",
+                            style = MaterialTheme.typography.body2,
+                        )
+                    }
                 }
             }
         }
+    }
+
+    @Composable
+    private fun LongPressSettingItem() {
+        SwitchItem(
+            text = "长按上半部分打开模块设置",
+            subtext = "长按视频上半部分直接唤起模块设置",
+            checked = model.isLongPressSetting.observeAsState(true),
+            onCheckedChange = {
+                model.changeIsLongPressSetting(it)
+            }
+        )
     }
 
     @Composable

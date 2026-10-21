@@ -137,6 +137,9 @@ class FreedomSettingVM(application: Application) : AndroidViewModel(application)
     private var _longPressMode = MutableLiveData(false)
     val longPressMode: LiveData<Boolean> = _longPressMode
 
+    private var _isLongPressSetting = MutableLiveData(true)
+    val isLongPressSetting: LiveData<Boolean> = _isLongPressSetting
+
     private var _isCommentColorMode = MutableLiveData(false)
     val isCommentColorMode: LiveData<Boolean> = _isCommentColorMode
 
@@ -206,6 +209,7 @@ class FreedomSettingVM(application: Application) : AndroidViewModel(application)
             setDialogFilterKeywords(config.dialogFilterKeywords)
             changeIsNeatMode(config.isNeatMode)
             setLongPressMode(config.longPressMode)
+            changeIsLongPressSetting(config.isLongPressSetting)
             changeIsAutoPlay(config.isAutoPlay)
             setAddAutoPlayButton(config.addAutoPlayButton)
             setDefaultAutoPlay(config.defaultAutoPlay)
@@ -456,6 +460,12 @@ class FreedomSettingVM(application: Application) : AndroidViewModel(application)
     fun setLongPressMode(value: Boolean) {
         _longPressMode.value = value
         config.longPressMode = value
+    }
+
+    // 长按上半部分打开模块设置
+    fun changeIsLongPressSetting(value: Boolean) {
+        _isLongPressSetting.value = value
+        config.isLongPressSetting = value
     }
 
     // 评论区颜色模式

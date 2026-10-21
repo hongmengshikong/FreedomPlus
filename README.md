@@ -57,6 +57,7 @@
 
 - 聊天消息防撤回
 - 禁用双击点赞 / 双击打开评论区
+- 长按抖音上半部分唤起模块设置（可关闭）
 - 视频过滤（直播、广告、长视频、文案关键字、弹窗关键字等）
 - 自动连播
 - 定时退出 / 空闲退出
@@ -76,7 +77,7 @@
 
 ### 步骤
 
-1. 从 [Releases](https://github.com/hsien926/FreedomPlus/releases) 下载 `FreedomPlus-1.3.6-release.apk` 并安装；
+1. 从 [Releases](https://github.com/hsien926/FreedomPlus/releases) 下载 `FreedomPlus-1.3.8-release.apk` 并安装；
 2. 打开 LSPosed，在「模块」中启用 **FreedomPlus**；
 3. 在作用域中勾选**抖音**（`com.ss.android.ugc.aweme`，极速版 / 火山版为独立包名，需另行勾选）；
 4. 给抖音授予**文件读写权限** —— 模块需要该权限读取配置与写入下载文件；
