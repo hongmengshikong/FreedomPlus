@@ -6,55 +6,71 @@ import io.github.fplus.core.config.ConfigV1
 import io.github.fplus.core.helper.DexkitBuilder
 import io.github.xpler.core.entity.NoneHook
 import io.github.xpler.core.proxy.MethodParam
+import java.lang.reflect.Field
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 信息流广告过滤（40.6.0 适配版）
+ * 信息流广告过滤（数据层实现，39.9.0 / 40.6.0 通用）
  *
- * ## 为什么不是 fork 的老做法
- * fork 原本把过滤挂在 `RecommendFeedFetchPresenter` / `FullFeedFollowFetchPresenter` 的
- * `onSuccess` 上，改写 `mModel.mData.items`。真机核对 40.6.0 后确认这条路已彻底断掉：
- *   1. 那两个 Presenter 类不存在；
- *   2. 持有 `FeedItemList` 字段的 55 个候选类中，没有任何一个含 `onSuccess` 方法；
- *   3. `FeedItemList.items` 全仓仅 3 处写入且都在其自身文件内（Gson 反序列化填充），
- *      没有可供 hook 的写入点。
+ * ## 为什么推翻了上一版的「位置映射」方案（重要，别再改回去）
  *
- * ## 现在的做法：在 adapter 层做「位置映射」
- * `AbstractFeedAdapter` 是本模块已有的、40.6.0 上能命中的锚点，且挂着三个**未被混淆**的方法：
- *   - `getCount()I`                 数据条数
- *   - `getItem(I)L.../Aweme;`       按位置取项
- *   - `getItems()Ljava/util/List;`  取数据（实测只返回 0~1 项的缓存视图，**不能**当完整列表用）
+ * 上一版 hook 了 `AbstractFeedAdapter.getCount()` / `getItem(int)`，让 ViewPager 只看到
+ * 「过滤后的位置」。这对 PagerAdapter 是**结构性错误**，会直接崩掉宿主：
  *
- * 因此不依赖 `getItems()`，改为：
- *   1. 在 `getCount()` 里按原始总数逐项扫描一次，得到「过滤后位置 → 原始位置」映射；
- *   2. `getCount()` 返回映射长度（RecyclerView 只会绑定这么多项）；
- *   3. `getItem(position)` 收到的是**过滤后**的位置，翻译回原始位置再取真实项。
- * 两者必须同时改，否则会错位或越界。
+ * 1. `VerticalViewPager.LJJIJIL(int)`（= `populate`）里有一条自洽断言：
+ *    ```
+ *    int count = this.g.getCount();          // g = mAdapter
+ *    if (count == this.b) { ...正常装载... }  // b = mExpectedAdapterCount
+ *    else throw new IllegalStateException(
+ *        "The application's PagerAdapter changed the adapter's contents without calling "
+ *      + "PagerAdapter#notifyDataSetChanged! Expected adapter item count: " + b
+ *      + ", found: " + count + " ...");
+ *    ```
+ *    `this.b` **只在** `notifyDataSetChanged()` 触发的 `dataSetChanged()` 里被写成当时的
+ *    `getCount()`。也就是契约：**两次 notify 之间 getCount() 必须恒定**。
+ *    而位置映射的返回值来自「每次调用都重扫一遍当前窗口」的 `mapping`——它是静态的、跨
+ *    adapter 共用、还带一个全局 `scanning` 重入标志。于是 notify 时刻可能是 13（15 项里 2 项
+ *    判为广告），滚动结束回调里再算一次变成 15（去掉广告又变回原始项）→ b≠count → populate
+ *    抛异常 → `mEndScrollRunnable` 里没人接 → 进程崩溃。这正是真机上看到的那条：
+ *    `Expected adapter item count: 13, found: 15`。
  *
- * 判定依据是 `Aweme.isAd`（public 字段，实测存在）。全程用字段名 + 反射，**不引用 aweme 代理类**
- * —— 那些类是 compileOnly、不打进 APK，运行时由抖音提供，一旦目标版本缺失就会抛
- * NoClassDefFoundError。
+ * 2. 抖音自己用 `getCount() == 0` 判断「是不是还空表」：
+ *    - `BaseListFragmentPanel.Xh(0Eod)`：
+ *      `if (adapter.getCount() == 0) { adapter.LJLILLLLZI(list); return true; }` —— **不 notify**
+ *    - `FollowFeedFragmentPanel.LJJJI(int, List)`：
+ *      `if (adapter.getCount() == 0) { adapter.LJLILLLLZI(list); } else { 插入 + notify; }`
+ *    hook 把 count 改小（甚至改成 0）时，抖音会走「整表替换但不 notify」分支，
+ *    pager 里的 b 永久停在旧值，下一次 populate 必崩。
+ *
+ * 3. 位置映射只翻译了 `getItem`，`getPageWidth(int)`、`getItemPosition(Object)`、
+ *    `LJJLIIJ`/`LJJLIIIJJI`、`LJJJLIIL`/`LJJLIL`/`LJJLJ` 全都在「原始索引」空间里工作 →
+ *    内容错位、页面反复重建、删除错项。这类补丁永远补不齐。
+ *
+ * ## 现在的做法：只动「落表」那一刻
+ *
+ * `AbstractFeedAdapter.LJLILLLLZI(java.util.List)` 是所有整表设置的落地点
+ * （`LJLJI(list, boolean)`、`LJJLJLI(int,int,List)` 最终都转调它）。在这里就地把 `isAd` 项剔掉：
+ * - 入参列表 + 适配器内同源的平行副本（子类 `N`）一起剔 → `getCount()` / `getItem(int)` /
+ *   `LJJLIIJ` 三者索引空间一致；
+ * - `getCount()` 永远等于真实数据量 → 上面 1/2/3 全部不成立；
+ * - notify 仍由抖音自己发，`mExpectedAdapterCount` 与 `getCount()` 永远同步。
+ *
+ * 只有走 `LJJLIL(int,int,List)` / `LJJLJ(int,Aweme)`（带插入位置/条数的接口）进来的广告项
+ * 不在这里处理：改它们的入参会把抖音的索引算错。那部分由 [HFeedAdBlock]
+ * （`VideoViewHolder.bind` 前置拦截）兜底成空白页 —— 不动 count，不会再引发崩溃。
  */
 class HFeedAdFilter : BaseHook() {
     companion object {
         private const val TAG = "HFeedAdFilter"
 
-        /** 过滤后位置 -> 原始位置 */
-        @Volatile
-        private var mapping: IntArray? = null
+        private var removedTotal = 0
+        private var lastLoggedSize = -1
 
-        /** 映射对应的 adapter 实例与原始总数，用于判断缓存是否过期 */
-        @Volatile
-        private var sourceRef: Any? = null
+        /** `Aweme.isAd` 字段缓存：getField 每次都要遍历，feed 每页几十项时值得缓存 */
+        private val adFieldCache = ConcurrentHashMap<Class<*>, Field>()
 
-        @Volatile
-        private var lastTotal = -1
-
-        /** 扫描期间置位，避免递归进自己的 hook */
-        @Volatile
-        private var scanning = false
-
-        private var totalRemoved = 0
-        private var lastLoggedTotal = -1
+        /** 明确没有 isAd 字段的类，避免每项都白跑一次 getField */
+        private val noAdField = java.util.Collections.newSetFromMap(ConcurrentHashMap<Class<*>, Boolean>())
     }
 
     private val config get() = ConfigV1.get()
@@ -62,94 +78,140 @@ class HFeedAdFilter : BaseHook() {
     override fun setTargetClass(): Class<*> =
         DexkitBuilder.abstractFeedAdapterClazz ?: NoneHook::class.java
 
-    /** 确认真机日志里能看到注册与目标类 */
     override fun onInit() {
-        KLogCat.tagI(TAG, "已注册, target=${targetClass.name}")
-    }
-
-    /** 条数改为过滤后的大小（顺带按需重建映射） */
-    @OnAfter("getCount")
-    fun getCountAfter(params: MethodParam) {
-        if (!config.isAdBlock) return
-        if (scanning) return
-        val total = params.result as? Int ?: return
-        val map = ensureMapping(params.thisObject, total) ?: return
-        params.setResult(map.size)
-    }
-
-    /** 位置翻译：入参是过滤后的位置，改取原始位置上的真实项 */
-    @OnAfter("getItem")
-    fun getItemAfter(params: MethodParam, position: Int) {
-        if (scanning) return
-        if (!config.isAdBlock) return
-        val map = mapping ?: return
-        val adapter = params.thisObject ?: return
-        if (sourceRef !== adapter) return
-
-        val original = map.getOrNull(position) ?: return
-        if (original == position) return   // 前面没有广告，位置无需翻译
-
-        rawGetItem(adapter, original)?.let { params.setResult(it) }
+        KLogCat.tagI(TAG, "已注册(数据层过滤), target=${targetClass.name}")
     }
 
     /**
-     * 按原始总数重建映射。
+     * 整表设置：`AbstractFeedAdapter.LJLILLLLZI(java.util.List)`。
      *
-     * 这里**不按 total 做缓存**：实测抖音该 adapter 的 total 长期稳定在个位数（1~7 项，
-     * 属滑动加载的窗口），但窗口里的内容会随滑动变化 —— 若只比较 total 就会漏掉
-     * 「total 没变但内容换了」的情况，导致广告检测不到。项数很小，每次重扫开销可忽略。
+     * 注意方法定义在基类、由子类（如 `X.C1790160wg5`）重写，重写体最后会 `super.LJLILLLLZI(...)`，
+     * 所以这里挂基类声明是有效的；xpler 只扫目标类的 declaredMethods，故不能写成通用基类 hook。
      */
-    private fun ensureMapping(adapter: Any?, total: Int): IntArray? {
-        if (adapter == null || total <= 0) return null
+    @OnBefore("LJLILLLLZI")
+    fun beforeSetItems(params: MethodParam, list: List<*>?) {
+        filterInPlace(params, list)
+    }
 
-        scanning = true
-        val kept = ArrayList<Int>(total)
-        try {
-            for (i in 0 until total) {
-                val item = rawGetItem(adapter, i)
-                if (!isFilteredAweme(item)) kept.add(i)
-            }
-        } finally {
-            scanning = false
-        }
-
-        val arr = kept.toIntArray()
-        mapping = arr
-        sourceRef = adapter
-        lastTotal = total
-
-        val removed = total - arr.size
-        if (removed > 0) {
-            totalRemoved += removed
-            KLogCat.tagI(
-                TAG,
-                "映射重建: 原始 $total 项, 广告 $removed 项, 过滤后 ${arr.size} 项 (累计移除 $totalRemoved)",
-            )
-        } else if (lastLoggedTotal != total) {
-            lastLoggedTotal = total
-            KLogCat.tagI(TAG, "映射重建: 原始 $total 项, 未发现广告项")
-        }
-        return arr
+    /** 整表设置带刷新标记：`AbstractFeedAdapter.LJLJI(java.util.List, boolean)` */
+    @Suppress("UNUSED_PARAMETER")
+    @OnBefore("LJLJI")
+    fun beforeSetItemsWithFlag(params: MethodParam, list: List<*>?, isRefresh: Boolean) {
+        filterInPlace(params, list)
     }
 
     /**
-     * 反射调用原始 `getItem(int)`。
-     * 扫描期间 `scanning=true`，因此这次调用不会再进 [getItemAfter]，不会递归。
+     * 就地剔除广告项，并把适配器里与入参同源的平行列表抹平。
+     *
+     * 为什么需要「抹平」：`X.C1790160wg5` 这类子类在 `LJLILLLLZI(list)` 重写体里先把自己的
+     * `N`（`FeedArrayList`，`extends ArrayList`）填成入参内容，**然后才** `super.LJLILLLLZI(...)`，
+     * 所以基类的 onBefore 触发时 `N` 已经是未过滤的旧内容。`getCount()` 读基类 `s.LIZ`，
+     * 而 `LJJLIIJ`/`LJJLIIIJJI`/`getItemPosition` 读 `N` —— 只过滤一边就会索引错位，
+     * 表现为页面反复重建、视频与卡片对不上。因此两边都要过滤。
+     *
+     * `FeedArrayList` 的所有结构修改都会检查是否在主线程（`Ensure.LJ(...,"feed_adapter_data")`），
+     * 所以非主线程时只替换入参、不碰 `N`，免得替抖音制造「多线程改数据源」上报。
      */
-    private fun rawGetItem(adapter: Any, position: Int): Any? = runCatching {
-        adapter.javaClass
-            .getMethod("getItem", Int::class.javaPrimitiveType)
-            .invoke(adapter, position)
-    }.getOrNull()
+    @Suppress("UNCHECKED_CAST")
+    private fun filterInPlace(params: MethodParam, list: List<*>?) {
+        if (!config.isAdBlock) return
+        val src = list ?: return
+        if (src.isEmpty()) return
+
+        val total = src.size
+        val kept = src.filterNot { isAdAweme(it) }
+        val removed = total - kept.size
+
+        if (removed <= 0) {
+            if (lastLoggedSize != total) {
+                lastLoggedSize = total
+                KLogCat.tagI(TAG, "整表 $total 项, 未发现广告")
+            }
+            return
+        }
+
+        val ads = src.filter { isAdAweme(it) }
+
+        // 1) 过滤入参本身：优先原地改（保留实例），不可变列表退化为替换参数
+        val mutated = runCatching {
+            val mutable = src as MutableList<Any?>
+            mutable.retainAll { !isAdAweme(it) }
+            mutable.size == kept.size
+        }.getOrDefault(false)
+
+        if (!mutated) {
+            // 抖音随后自己会 notify，b 与 count 依旧同步
+            params.setArgs(arrayOf<Any?>(kept))
+        }
+
+        // 2) 抹平适配器内的平行副本（子类 N 等）
+        val adapter = params.thisObject
+        if (adapter != null) {
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                scrubParallelLists(adapter, ads)
+            } else {
+                KLogCat.tagI(TAG, "非主线程调用, 跳过平行列表抹平(避免宿主的多线程修改上报)")
+            }
+        }
+
+        removedTotal += removed
+        KLogCat.tagI(
+            TAG,
+            "整表 $total 项, 剔除广告 $removed 项, 剩余 ${kept.size} 项" +
+                " (inPlace=$mutated, 累计剔除 $removedTotal)",
+        )
+    }
 
     /**
-     * 是否属于要过滤掉的广告项。
-     * 依据 `Aweme.isAd`（public 字段）。读不到就当作不广告——宁可放过，不可误杀。
+     * 遍历适配器实例（含父类）所有 `List` 类型字段，凡「确实含有我们刚剔除的那几个广告对象」
+     * （用引用相等判定）的列表，一并剔除。用产地校验避免误伤无关列表。
      */
-    private fun isFilteredAweme(item: Any?): Boolean {
+    @Suppress("UNCHECKED_CAST")
+    private fun scrubParallelLists(adapter: Any, ads: List<Any?>) {
+        var cls: Class<*>? = adapter.javaClass
+        while (cls != null && cls != Any::class.java) {
+            for (field in cls.declaredFields) {
+                if (java.lang.reflect.Modifier.isStatic(field.modifiers)) continue
+                if (!List::class.java.isAssignableFrom(field.type)) continue
+
+                val value = runCatching {
+                    field.isAccessible = true
+                    field.get(adapter)
+                }.getOrNull() as? MutableList<Any?> ?: continue
+
+                if (value.isEmpty()) continue
+                val ownsAd = ads.any { ad -> value.any { it === ad } }
+                if (!ownsAd) continue
+
+                runCatching { value.retainAll { !isAdAweme(it) } }
+                    .onFailure { KLogCat.tagI(TAG, "平行列表剔除失败: ${it.message}") }
+            }
+            cls = cls.superclass
+        }
+    }
+
+    /**
+     * 是否广告项。依据 `Aweme.isAd`（Gson 名 `is_ads`，public 字段）。
+     * 读不到就按非广告处理 —— 宁可放过，不可误杀，更不能因为读失败去改 count。
+     */
+    private fun isAdAweme(item: Any?): Boolean {
         if (item == null) return false
-        return runCatching {
-            item.javaClass.getField("isAd").getBoolean(item)
-        }.getOrDefault(false)
+        val cls = item.javaClass
+        if (noAdField.contains(cls)) return false
+
+        val cached = adFieldCache[cls]
+        val field = if (cached != null) {
+            cached
+        } else {
+            val found = runCatching { cls.getField("isAd").apply { isAccessible = true } }.getOrNull()
+            if (found == null) {
+                noAdField.add(cls)
+                return false
+            }
+            adFieldCache[cls] = found
+            found
+        }
+
+        return runCatching { field.getBoolean(item) }.getOrDefault(false)
     }
 }

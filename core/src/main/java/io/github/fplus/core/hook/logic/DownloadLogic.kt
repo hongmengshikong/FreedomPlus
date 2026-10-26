@@ -227,6 +227,8 @@ class DownloadLogic(
                                 progressText = "$index/${aweme.images.size} %s%%",
                             )
                             if (resultFile != null) {
+                                // 抖音部分图文是 VVIC/HEIC，相册和电脑都打不开：用抖音内置解码器就地转成 JPEG
+                                HeifTranscoder.transcodeInPlace(resultFile)
                                 downloadCount += 1
                                 imageFiles.add(resultFile)
                                 KMediaUtils.notifyMediaUpdate(context, resultFile.absolutePath)
@@ -302,6 +304,8 @@ class DownloadLogic(
                                 progressText = "$index/${aweme.images.size} %s%%",
                             )
                             if (resultFile != null) {
+                                // 同上：VVIC/HEIC 就地转 JPEG
+                                HeifTranscoder.transcodeInPlace(resultFile)
                                 downloadCount += 1
                                 KMediaUtils.notifyMediaUpdate(context, resultFile.absolutePath)
                             }
