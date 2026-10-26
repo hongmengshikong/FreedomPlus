@@ -7,6 +7,20 @@
 
 ---
 
+## v1.3.9
+
+### 修复
+
+- **抖音 40.8.0 运行后触发 `PagerAdapter` 崩溃**：旧版信息流过滤改写 `getCount()` / `getItem()`，使 Adapter 对外计数偏离真实数据量。抖音又用 `getCount() == 0` 判断“整表替换但不通知”，导致 `VerticalViewPager` 保存的期望数量长期停在旧值，最终抛出 `IllegalStateException: The application's PagerAdapter changed the adapter's contents without calling PagerAdapter#notifyDataSetChanged!`。
+- 信息流过滤改为数据落表阶段剔除广告，并同步清理 Adapter 内同源的平行列表，保证 `getCount()`、`getItem()` 与页面索引始终处于同一空间；补充只针对该异常的兜底刷新，避免滚动结束回调中的残余失配直接终止进程。
+- 本修复已在**小米手机**完成真机验证。其他品牌手机需自行测试。
+
+### 变更
+
+- 版本号升级至 `v1.3.9`（versionCode 145）。
+
+---
+
 ## v1.3.8
 
 本次更新修复真机验证中发现的下载崩溃，并新增一个更顺手的模块设置入口。
